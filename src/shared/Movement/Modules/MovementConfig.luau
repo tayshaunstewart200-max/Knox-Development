@@ -4,6 +4,7 @@ MovementConfig.Speed = {
 	Walk = 16,
 	Sprint = 28,
 	Attacking = 10,
+	Disabled = 0,
 	Depleted = 8,
 	Acceleration = 3,
 	Deceleration = 5,
@@ -21,6 +22,7 @@ MovementConfig.Stamina = {
 MovementConfig.Momentum = {
 	TurnSpeed = 4,
 	MinTurnThreshold = 0.1,
+	BackwardTurnThreshold = -0.35,
 }
 
 return MovementConfig
