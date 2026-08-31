@@ -7,6 +7,7 @@ local player = Players.LocalPlayer
 
 local Modules = ReplicatedStorage.Movement.Modules
 local MovementConfig = require(Modules.MovementConfig)
+local MovementStateResolver = require(Modules.MovementStateResolver)
 local StaminaService = require(Modules.StaminaService)
 local SpeedController = require(Modules.SpeedController)
 local MomentumController = require(Modules.MomentumController)
@@ -16,6 +17,7 @@ local AnimationController = require(player:WaitForChild("PlayerScripts").Combat.
 local SprintAnim = ReplicatedStorage.Movement.Animations:FindFirstChild("Sprint")
 
 local TOGGLE_COOLDOWN = 0.2
+local MOVEMENT_THRESHOLD = 0.1
 
 local character = nil
 local humanoid = nil
@@ -39,24 +41,25 @@ local function StopSprint()
 end
 
 local function UpdateMovement()
-	if not humanoid then return end
+	if not humanoid or not character then return end
 
+	local policy = MovementStateResolver:Resolve(character, CombatStateManager)
 	local isDepleted = StaminaService:IsDepleted()
-	local isDead = CombatStateManager:Has(character, "Dead")
-	local isStunned = CombatStateManager:Has(character, "Stunned")
-	local isAttacking = CombatStateManager:Has(character, "Attacking")
+	local hasMovementInput = humanoid.MoveDirection.Magnitude > MOVEMENT_THRESHOLD
 
 	local shouldSprint = sprintToggled
-		and humanoid.MoveDirection.Magnitude > 0.1
+		and hasMovementInput
+		and policy.CanSprint
 		and not isDepleted
-		and not isDead
-		and not isStunned
-		and not isAttacking
 
-	if shouldSprint then StartSprint() else StopSprint() end
+	if shouldSprint then
+		StartSprint()
+	else
+		StopSprint()
+	end
 
 	local speedTarget
-	if isAttacking then
+	if not policy.CanMove then
 		speedTarget = "Attacking"
 	elseif isSprinting and not isDepleted then
 		speedTarget = "Sprint"
@@ -69,18 +72,29 @@ end
 
 local function OnSprintAction(_, inputState)
 	if inputState ~= Enum.UserInputState.Begin then return end
+
 	local now = os.clock()
 	if now - lastToggleTime < TOGGLE_COOLDOWN then return end
 	lastToggleTime = now
+
 	sprintToggled = not sprintToggled
 	return Enum.ContextActionResult.Sink
 end
 
 local function Cleanup()
+	StopSprint()
+
 	if heartbeatConnection then
 		heartbeatConnection:Disconnect()
 		heartbeatConnection = nil
 	end
+
+	MomentumController:Cleanup()
+	SpeedController:Cleanup()
+	StaminaService:Cleanup()
+
+	character = nil
+	humanoid = nil
 end
 
 local function SetupCharacter(newCharacter)
@@ -95,7 +109,6 @@ local function SetupCharacter(newCharacter)
 
 	SpeedController:Setup(newCharacter)
 	MomentumController:Setup(newCharacter)
-	StaminaService:Cleanup()
 	StaminaService:Start()
 	AnimationController:Setup(newCharacter)
 
