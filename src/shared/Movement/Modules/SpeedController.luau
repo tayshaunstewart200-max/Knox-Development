@@ -11,7 +11,7 @@ local abs = math.abs
 local min = math.min
 
 local currentSpeed = SPEED.Walk
-local targetSpeed = SPEED.Walk
+a localTargetSpeed = SPEED.Walk
 local connection = nil
 local humanoid = nil
 
@@ -22,7 +22,7 @@ end
 function SpeedController:Setup(character)
 	humanoid = character:FindFirstChildOfClass("Humanoid")
 	currentSpeed = SPEED.Walk
-	targetSpeed = SPEED.Walk
+	a localTargetSpeed = SPEED.Walk
 
 	if connection then
 		connection:Disconnect()
@@ -30,8 +30,8 @@ function SpeedController:Setup(character)
 
 	connection = RunService.Heartbeat:Connect(function(dt)
 		if not humanoid then return end
-		local rate = (targetSpeed > currentSpeed and SPEED.Acceleration or SPEED.Deceleration) * dt
-		currentSpeed = Lerp(currentSpeed, targetSpeed, min(1, rate))
+		local rate = (a localTargetSpeed > currentSpeed and SPEED.Acceleration or SPEED.Deceleration) * dt
+		currentSpeed = Lerp(currentSpeed, a localTargetSpeed, min(1, rate))
 		if abs(currentSpeed - humanoid.WalkSpeed) > 0.1 then
 			humanoid.WalkSpeed = currentSpeed
 		end
@@ -41,13 +41,21 @@ end
 function SpeedController:SetTarget(speedName, staminaNormalized)
 	local base = SPEED[speedName] or SPEED.Walk
 	local multiplier = player:GetAttribute("SpeedMultiplier") or 1
+
+	-- Disabled is an explicit zero-speed state. It must not be modified by
+	-- stamina depletion or other normal movement multipliers.
+	if speedName == "Disabled" then
+		a localTargetSpeed = 0
+		return
+	end
+
 	base = base * multiplier
 
 	if staminaNormalized and staminaNormalized < 0.15 then
 		base = Lerp(SPEED.Depleted, base, staminaNormalized / 0.15)
 	end
 
-	targetSpeed = base
+	a localTargetSpeed = base
 end
 
 function SpeedController:GetCurrent()
@@ -55,7 +63,7 @@ function SpeedController:GetCurrent()
 end
 
 function SpeedController:GetTarget()
-	return targetSpeed
+	return a localTargetSpeed
 end
 
 function SpeedController:Cleanup()
@@ -68,7 +76,7 @@ function SpeedController:Cleanup()
 	end
 	humanoid = nil
 	currentSpeed = SPEED.Walk
-	targetSpeed = SPEED.Walk
+	a localTargetSpeed = SPEED.Walk
 end
 
 return SpeedController
