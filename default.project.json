@@ -1,5 +1,6 @@
 {
   "name": "Knox-Development",
+
   "tree": {
     "$className": "DataModel",
 
@@ -17,10 +18,16 @@
       }
     },
 
+    "ServerStorage": {
+      "$path": "src/server_storage"
+    },
+
+    "StarterGui": {
+      "$path": "src/starter_gui"
+    },
+
     "Workspace": {
-      "$properties": {
-        "FilteringEnabled": true
-      }
+      "$path": "src/workspace"
     }
   }
 }
