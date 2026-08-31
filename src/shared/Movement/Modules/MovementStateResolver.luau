@@ -8,6 +8,8 @@ local DEFAULT_POLICY = {
 }
 
 local STATE_POLICIES = {
+	Attacking = { CanSprint = false, CanJump = false },
+	Parrying = { CanSprint = false, CanJump = false },
 	Dead = { CanMove = false, CanRotate = false, CanSprint = false, CanJump = false },
 	Stunned = { CanMove = false, CanRotate = false, CanSprint = false, CanJump = false },
 	GuardBreak = { CanMove = false, CanRotate = false, CanSprint = false, CanJump = false },
