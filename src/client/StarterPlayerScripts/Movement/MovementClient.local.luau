@@ -6,7 +6,6 @@ local ContextActionService = game:GetService("ContextActionService")
 local player = Players.LocalPlayer
 
 local Modules = ReplicatedStorage.Movement.Modules
-local MovementConfig = require(Modules.MovementConfig)
 local MovementStateResolver = require(Modules.MovementStateResolver)
 local StaminaService = require(Modules.StaminaService)
 local SpeedController = require(Modules.SpeedController)
@@ -60,7 +59,7 @@ local function UpdateMovement()
 
 	local speedTarget
 	if not policy.CanMove then
-		speedTarget = "Attacking"
+		speedTarget = "Disabled"
 	elseif isSprinting and not isDepleted then
 		speedTarget = "Sprint"
 	else
