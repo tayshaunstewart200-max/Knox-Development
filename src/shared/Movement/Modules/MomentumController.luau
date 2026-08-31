@@ -1,43 +1,69 @@
--- MomentumController
 local MomentumController = {}
 
 local RunService = game:GetService("RunService")
 local MovementConfig = require(script.Parent.MovementConfig)
+local MovementStateResolver = require(script.Parent.MovementStateResolver)
+local CombatStateManager = require(script.Parent.Parent.Parent.SharedModules.CombatStateManager)
 
 local CONFIG = MovementConfig.Momentum
-local atan2 = math.atan2
-local sin = math.sin
-local cos = math.cos
-local min = math.min
-local cfNew = CFrame.new
-local cfAngles = CFrame.Angles
 
 local connection = nil
 local humanoid = nil
 local hrp = nil
+local character = nil
 
-function MomentumController:Setup(character)
-	humanoid = character:FindFirstChildOfClass("Humanoid")
-	hrp = character:FindFirstChild("HumanoidRootPart")
-	if not humanoid or not hrp then return end
+local function GetHorizontal(vector)
+	local horizontal = Vector3.new(vector.X, 0, vector.Z)
+	if horizontal.Magnitude < CONFIG.MinTurnThreshold then
+		return nil
+	end
+	return horizontal.Unit
+end
 
-	humanoid.AutoRotate = false
+function MomentumController:Setup(newCharacter)
+	self:Cleanup()
 
-	if connection then
-		connection:Disconnect()
+	character = newCharacter
+	humanoid = newCharacter:FindFirstChildOfClass("Humanoid")
+	hrp = newCharacter:FindFirstChild("HumanoidRootPart")
+	if not humanoid or not hrp then
+		character = nil
+		return
 	end
 
+	-- Rotation is owned exclusively by this controller during exploration.
+	humanoid.AutoRotate = false
+
 	connection = RunService.Heartbeat:Connect(function(dt)
-		if not hrp then return end
-		local moveDir = humanoid.MoveDirection
-		if moveDir.Magnitude < CONFIG.MinTurnThreshold then return end
+		if not character or not humanoid or not hrp or humanoid.Health <= 0 then
+			return
+		end
 
-		local targetAngle = atan2(-moveDir.X, -moveDir.Z)
-		local lookVector = hrp.CFrame.LookVector
-		local currentAngle = atan2(-lookVector.X, -lookVector.Z)
-		local diff = atan2(sin(targetAngle - currentAngle), cos(targetAngle - currentAngle))
+		local policy = MovementStateResolver:Resolve(character, CombatStateManager)
+		if not policy.CanRotate then
+			return
+		end
 
-		hrp.CFrame = cfNew(hrp.Position) * cfAngles(0, currentAngle + diff * min(1, CONFIG.TurnSpeed * dt), 0)
+		local moveDirection = GetHorizontal(humanoid.MoveDirection)
+		if not moveDirection then
+			return
+		end
+
+		local currentLook = GetHorizontal(hrp.CFrame.LookVector)
+		if not currentLook then
+			return
+		end
+
+		-- Exploration rule: forward/side movement drives facing, but a
+		-- predominantly backward input does not force a 180-degree turn.
+		local forwardDot = currentLook:Dot(moveDirection)
+		if forwardDot < -0.35 then
+			return
+		end
+
+		local targetCFrame = CFrame.lookAt(hrp.Position, hrp.Position + moveDirection)
+		local alpha = 1 - math.exp(-CONFIG.TurnSpeed * dt)
+		hrp.CFrame = hrp.CFrame:Lerp(targetCFrame, alpha)
 	end)
 end
 
@@ -46,11 +72,14 @@ function MomentumController:Cleanup()
 		connection:Disconnect()
 		connection = nil
 	end
+
 	if humanoid then
 		humanoid.AutoRotate = true
 	end
+
 	humanoid = nil
 	hrp = nil
+	character = nil
 end
 
 return MomentumController
