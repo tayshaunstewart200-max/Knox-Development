@@ -10,6 +10,10 @@ local Profiles = {}
 local ProgressionStore = ProfileStore.New("PlayerProgression", ProgressionConfig.DefaultProgressionData)
 
 function ProfileService.LoadProfile(player)
+	if Profiles[player] ~= nil then
+		return Profiles[player]
+	end
+
 	local profile = ProgressionStore:StartSessionAsync(tostring(player.UserId), {
 		Cancel = function()
 			return Profiles[player] ~= nil or player.Parent ~= Players
@@ -19,6 +23,11 @@ function ProfileService.LoadProfile(player)
 	if profile == nil then
 		player:Kick("Profile failed to load. Please rejoin.")
 		return nil
+	end
+
+	if Profiles[player] ~= nil then
+		profile:EndSession()
+		return Profiles[player]
 	end
 
 	profile:AddUserId(player.UserId)
