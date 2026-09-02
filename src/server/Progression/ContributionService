@@ -1,0 +1,88 @@
+local Players = game:GetService("Players")
+
+local ContributionService = {}
+
+local PREFIX = "DmgContrib_"
+
+local function AttributeKey(userId)
+	return PREFIX .. tostring(userId)
+end
+
+local function UserIdFromKey(key)
+	local userIdString = string.match(key, "^" .. PREFIX .. "(%d+)$")
+	return userIdString and tonumber(userIdString) or nil
+end
+
+function ContributionService:RecordDamage(targetHumanoid, player, damage)
+	if not targetHumanoid or not player then
+		return
+	end
+	if type(damage) ~= "number" or damage ~= damage or damage <= 0 then
+		return
+	end
+	if damage == math.huge then
+		return
+	end
+
+	local key = AttributeKey(player.UserId)
+	local existing = targetHumanoid:GetAttribute(key) or 0
+	local maxHealth = targetHumanoid.MaxHealth
+	local updated = existing + damage
+	if maxHealth > 0 then
+		updated = math.min(updated, maxHealth)
+	end
+	targetHumanoid:SetAttribute(key, updated)
+end
+
+function ContributionService:GetContributions(targetHumanoid)
+	local contributions = {}
+	local total = 0
+
+	if not targetHumanoid then
+		return contributions, total
+	end
+
+	for key, value in pairs(targetHumanoid:GetAttributes()) do
+		local userId = UserIdFromKey(key)
+		if userId and type(value) == "number" and value > 0 then
+			contributions[userId] = value
+			total += value
+		end
+	end
+
+	return contributions, total
+end
+
+function ContributionService:GetQualifyingPlayers(targetHumanoid, minimumPercent)
+	local contributions, total = self:GetContributions(targetHumanoid)
+	local maxHealth = targetHumanoid and targetHumanoid.MaxHealth or 0
+	local qualifying = {}
+
+	if maxHealth <= 0 then
+		return qualifying, contributions, total
+	end
+
+	for userId, damage in pairs(contributions) do
+		if (damage / maxHealth) >= minimumPercent then
+			local player = Players:GetPlayerByUserId(userId)
+			if player then
+				table.insert(qualifying, { player = player, damage = damage })
+			end
+		end
+	end
+
+	return qualifying, contributions, total
+end
+
+function ContributionService:Clear(targetHumanoid)
+	if not targetHumanoid then
+		return
+	end
+	for key in pairs(targetHumanoid:GetAttributes()) do
+		if UserIdFromKey(key) then
+			targetHumanoid:SetAttribute(key, nil)
+		end
+	end
+end
+
+return ContributionService
