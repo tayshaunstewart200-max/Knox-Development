@@ -8,6 +8,14 @@ local ProgressionService = {}
 ProgressionService.LevelUp = Signal.New()
 ProgressionService.PromotionAvailable = Signal.New()
 
+local function IsValidXPAmount(amount)
+	return type(amount) == "number" and amount == amount and amount ~= math.huge and amount > 0
+end
+
+local function IsEligible(data)
+	return data.Level >= ProgressionConfig.PromotionThreshold and ProgressionConfig.GetNextRank(data.Rank) ~= nil
+end
+
 local function ProcessLevelUps(player, data)
 	local leveledUp = false
 	while true do
@@ -26,25 +34,23 @@ local function ProcessLevelUps(player, data)
 end
 
 function ProgressionService.AwardXP(player, amount)
-	if amount == nil or amount <= 0 then
+	if not IsValidXPAmount(amount) then
 		return
 	end
-
 	local profile = ProfileService.GetProfile(player)
 	if profile == nil then
 		return
 	end
-
 	local data = profile.Data
+	local wasEligible = IsEligible(data)
 	local multiplier = StatBonusService.GetXPMultiplier(data)
 	data.XP += amount * multiplier
-
 	local leveledUp = ProcessLevelUps(player, data)
 	if leveledUp then
 		ProgressionService.LevelUp:Fire(player, data.Level, data.Rank)
 	end
-
-	if data.Level >= ProgressionConfig.PromotionThreshold then
+	local nowEligible = IsEligible(data)
+	if nowEligible and not wasEligible then
 		ProgressionService.PromotionAvailable:Fire(player, data.Rank, data.Level)
 	end
 end
@@ -62,7 +68,7 @@ function ProgressionService.IsEligibleForPromotion(player)
 	if data == nil then
 		return false
 	end
-	return data.Level >= ProgressionConfig.PromotionThreshold and ProgressionConfig.GetNextRank(data.Rank) ~= nil
+	return IsEligible(data)
 end
 
 return ProgressionService
