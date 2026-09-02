@@ -4,10 +4,18 @@ local MotionController = require(script.Parent.Parent.Modules.MotionController)
 local CombatModule = require(script.Parent.Parent.Modules.CombatModule)
 local ZoneHandler = require(script.Parent.Parent.Modules.ZoneHandler)
 local CleanupService = require(script.Parent.Parent.Modules.CleanupService)
-local EnemyDefeatedBridge = require(script.Parent.Parent.Parent.Progression.EnemyDefeatedBridge)
+local ContributionService = require(script.Parent.Parent.Parent.Progression.ContributionService)
+local RewardService = require(script.Parent.Parent.Parent.Progression.RewardService)
 
 local NPCController = {}
 NPCController.__index = NPCController
+
+local LEASH_GRACE_PERIOD_DEFAULT = 4
+
+local DEATH_REWARD_POLICY = {
+	Type = "Participation",
+	MinimumContributionPercent = 0.20,
+}
 
 function NPCController.new(npc, config)
 	local self = setmetatable({}, NPCController)
@@ -18,6 +26,7 @@ function NPCController.new(npc, config)
 	self.target = nil
 	self.home = npc.HumanoidRootPart.Position
 	self.alive = true
+	self.leashTimerStart = nil
 
 	self.stateManager = EnemyStateManager.new(npc)
 	self.stateManager:OnTransition(function(n, from, to)
@@ -36,6 +45,10 @@ function NPCController.new(npc, config)
 	return self
 end
 
+function NPCController:_getLeashGracePeriod()
+	return self.config.LeashGracePeriod or LEASH_GRACE_PERIOD_DEFAULT
+end
+
 function NPCController:_onStateChanged(from, to)
 	if to == "Roam" then
 		self:_enterRoam()
@@ -52,6 +65,7 @@ end
 
 function NPCController:_enterRoam()
 	self.target = nil
+	self.leashTimerStart = nil
 	MotionController.Roam(self.npc, self.home, self.config)
 end
 
@@ -61,10 +75,7 @@ function NPCController:_enterChase()
 		return
 	end
 
-	if ZoneHandler.IsOutsideLeash(self.npc) then
-		self.stateManager:Transition("Return")
-		return
-	end
+	self.leashTimerStart = nil
 
 	MotionController.Chase(self.npc, self.target, self.config, function()
 		AIManager.NotifyDestinationReached(self.id)
@@ -84,6 +95,7 @@ end
 
 function NPCController:_enterReturn()
 	self.target = nil
+	self.leashTimerStart = nil
 	MotionController.MoveTo(self.npc, self.home, self.config, function()
 		AIManager.NotifyDestinationReached(self.id)
 	end)
@@ -92,6 +104,7 @@ end
 function NPCController:_enterDead()
 	self.alive = false
 	self.target = nil
+	self.leashTimerStart = nil
 	MotionController.Stop(self.npc)
 end
 
@@ -125,13 +138,22 @@ function NPCController:RefreshChase(playerPositions)
 	local dist = (npcRoot.Position - targetPos).Magnitude
 
 	if dist <= self.config.AttackRange then
+		self.leashTimerStart = nil
 		self.stateManager:Transition("Attack")
 		return
 	end
 
 	if ZoneHandler.IsOutsideLeash(self.npc) then
-		self.stateManager:Transition("Return")
-		return
+		if not self.leashTimerStart then
+			self.leashTimerStart = os.clock()
+		elseif os.clock() - self.leashTimerStart >= self:_getLeashGracePeriod() then
+			self.leashTimerStart = nil
+			self.target = nil
+			self.stateManager:Transition("Return")
+			return
+		end
+	else
+		self.leashTimerStart = nil
 	end
 
 	MotionController.Chase(self.npc, self.target, self.config, function()
@@ -154,14 +176,6 @@ function NPCController:OnPlayerDetected(player, distance)
 
 	if state == "Roam" or state == "Return" then
 		self.stateManager:Transition("Chase")
-	elseif state == "Chase" then
-		if distance <= self.config.AttackRange then
-			self.stateManager:Transition("Attack")
-		end
-	elseif state == "Attack" then
-		if distance > self.config.AttackRange then
-			self.stateManager:Transition("Chase")
-		end
 	end
 end
 
@@ -174,6 +188,7 @@ function NPCController:OnPlayerLost()
 
 	if state == "Chase" or state == "Attack" then
 		self.target = nil
+		self.leashTimerStart = nil
 		self.stateManager:Transition("Return")
 	end
 end
@@ -210,8 +225,9 @@ function NPCController:OnAttackEnd(targetAlive)
 
 	local root = self.npc.HumanoidRootPart
 	local dist = (root.Position - targetRoot.Position).Magnitude
+	local leaveRange = self.config.AttackRange + (self.config.LeaveAttackRangeBuffer or 5)
 
-	if dist <= self.config.AttackRange then
+	if dist <= leaveRange then
 		self:_enterAttack()
 	else
 		self.stateManager:Transition("Chase")
@@ -247,10 +263,16 @@ function NPCController:OnDeath()
 	MotionController.Stop(self.npc)
 	self.stateManager:Transition("Dead")
 
-	if self.config.XPReward ~= nil and self.config.SilverReward ~= nil then
-		local xpRoll = math.random(self.config.XPReward.Min, self.config.XPReward.Max)
-		local silverRoll = math.random(self.config.SilverReward.Min, self.config.SilverReward.Max)
-		EnemyDefeatedBridge.ProcessDeath(self.npc, xpRoll, silverRoll)
+	local targetHumanoid = self.npc:FindFirstChildOfClass("Humanoid")
+	if targetHumanoid and self.config.XPReward ~= nil and self.config.SilverReward ~= nil then
+		RewardService.ProcessDeath(targetHumanoid, DEATH_REWARD_POLICY, {
+			XPReward = self.config.XPReward,
+			SilverReward = self.config.SilverReward,
+		})
+	end
+
+	if targetHumanoid then
+		ContributionService:Clear(targetHumanoid)
 	end
 
 	CleanupService.RegisterDead(self.npc)
@@ -262,6 +284,7 @@ function NPCController:Destroy()
 	ZoneHandler.Unregister(self.npc)
 	self.target = nil
 	self.alive = false
+	self.leashTimerStart = nil
 end
 
 return NPCController
