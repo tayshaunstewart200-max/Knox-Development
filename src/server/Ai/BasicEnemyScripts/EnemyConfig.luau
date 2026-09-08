@@ -6,6 +6,7 @@ local EnemyConfig = {
 		Health = 80,
 		DetectionRange = 40,
 		AttackRange = 8,
+		LeaveAttackRangeBuffer = 5,
 		AttackCooldown = 1.5,
 		ZoneRadius = 60,
 		XPReward = { Min = 45, Max = 70 },
