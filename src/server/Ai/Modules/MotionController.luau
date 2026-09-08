@@ -4,6 +4,8 @@ local AIManager = require(script.Parent.Parent.AIManager)
 
 local MotionController = {}
 
+local DEBUG = false
+
 local CONFIG = {
 	ROAM_RADIUS = 20,
 	ROAM_WAIT_MIN = 2,
@@ -19,9 +21,12 @@ local CONFIG = {
 
 	WAYPOINT_REACHED_RADIUS = 3,
 	RETARGET_DISTANCE = 15,
-	REPATH_INTERVAL = 0.5,
+	REPATH_INTERVAL = 0.3,
 	STUCK_TIMEOUT = 2,
 	STUCK_MIN_PROGRESS = 1,
+
+	PATH_RETRY_MIN = 0.15,
+	PATH_RETRY_MAX = 0.5,
 }
 
 local WAYPOINT_REACHED_RADIUS_SQ = CONFIG.WAYPOINT_REACHED_RADIUS * CONFIG.WAYPOINT_REACHED_RADIUS
@@ -30,6 +35,12 @@ local STUCK_MIN_PROGRESS_SQ = CONFIG.STUCK_MIN_PROGRESS * CONFIG.STUCK_MIN_PROGR
 
 local active = {}
 local roamThreads = {}
+
+local function log(...)
+	if DEBUG then
+		print(string.format("[Motion %.2f]", os.clock()), ...)
+	end
+end
 
 local function flatDistSq(a, b)
 	local dx = a.X - b.X
@@ -62,7 +73,7 @@ local function cancelRoam(npc)
 	end
 end
 
-local function teardown(npc, keepChaseTarget)
+local function teardown(npc)
 	local entry = active[npc]
 
 	if not entry then
@@ -79,20 +90,15 @@ local function teardown(npc, keepChaseTarget)
 		entry.thread = nil
 	end
 
-	if keepChaseTarget and entry.chaseTarget then
-		active[npc] = {
-			chaseTarget = entry.chaseTarget,
-			chaseTargetRoot = entry.chaseTargetRoot,
-		}
-	else
-		active[npc] = nil
-	end
+	active[npc] = nil
 
 	local humanoid = npc:FindFirstChildOfClass("Humanoid")
 
 	if humanoid then
 		humanoid:Move(Vector3.zero)
 	end
+
+	log("Chase Stopped", npc.Name)
 end
 
 local function setSpeed(npc, speed)
@@ -145,6 +151,8 @@ local function getRoamWaitMultiplier(npc)
 	return 1
 end
 
+-- isPersistent chase jobs (Chase()) survive path failures/stuck NPCs by retrying
+-- instead of tearing down. Non-persistent jobs (Roam/MoveTo) fail out like before.
 local function startSteering(
 	npc,
 	destination,
@@ -153,7 +161,8 @@ local function startSteering(
 	getDestination,
 	stopDistance,
 	chaseTarget,
-	chaseTargetRoot
+	chaseTargetRoot,
+	isPersistent
 )
 	local humanoid = npc:FindFirstChildOfClass("Humanoid")
 	local root = npc:FindFirstChild("HumanoidRootPart")
@@ -166,7 +175,7 @@ local function startSteering(
 		return
 	end
 
-	teardown(npc, false)
+	teardown(npc)
 
 	local stopDistanceSq = stopDistance and (stopDistance * stopDistance) or nil
 
@@ -180,6 +189,9 @@ local function startSteering(
 		lastDirection = nil,
 		chaseTarget = chaseTarget,
 		chaseTargetRoot = chaseTargetRoot,
+		isPersistent = isPersistent,
+		pathPending = false,
+		nextPathRetryClock = 0,
 	}
 
 	active[npc] = entry
@@ -216,25 +228,34 @@ local function startSteering(
 		return true
 	end
 
-	if not repath(destination) then
-		local keptChaseTarget = chaseTarget
+	-- On path failure: persistent jobs stay alive and retry on a backoff instead
+	-- of tearing down, so a chase never dies from a single bad path computation.
+	local function handlePathFailure()
+		log("Path Failed", npc.Name)
 
-		if active[npc] == entry then
-			active[npc] = nil
+		if isPersistent then
+			entry.waypoints = nil
+			entry.nextPathRetryClock = os.clock()
+				+ CONFIG.PATH_RETRY_MIN
+				+ math.random() * (CONFIG.PATH_RETRY_MAX - CONFIG.PATH_RETRY_MIN)
+			return
 		end
 
-		if keptChaseTarget then
-			active[npc] = {
-				chaseTarget = keptChaseTarget,
-				chaseTargetRoot = chaseTargetRoot,
-			}
-		end
+		teardown(npc)
 
 		if onFailed then
 			onFailed()
 		end
+	end
 
-		return
+	if not repath(destination) then
+		handlePathFailure()
+
+		if not isPersistent then
+			return
+		end
+	else
+		log("Chase Started", npc.Name)
 	end
 
 	entry.heartbeatConn = RunService.Heartbeat:Connect(function()
@@ -250,7 +271,7 @@ local function startSteering(
 			or not currentRoot
 			or currentHumanoid.Health <= 0
 		then
-			teardown(npc, false)
+			teardown(npc)
 			return
 		end
 
@@ -263,7 +284,7 @@ local function startSteering(
 		end
 
 		if not currentDestination then
-			teardown(npc, false)
+			teardown(npc)
 
 			if onFailed then
 				onFailed()
@@ -276,7 +297,7 @@ local function startSteering(
 			local liveDistSq = distSq(currentRoot.Position, currentDestination)
 
 			if liveDistSq <= stopDistanceSq then
-				teardown(npc, true)
+				teardown(npc)
 
 				if onReached then
 					onReached()
@@ -286,18 +307,27 @@ local function startSteering(
 			end
 		end
 
+		-- No current path (either never got one, or last attempt failed): retry
+		-- on a backoff instead of every frame.
+		if not entry.waypoints then
+			if os.clock() >= entry.nextPathRetryClock then
+				if repath(currentDestination) then
+					log("Chase Already Active", npc.Name)
+				else
+					handlePathFailure()
+				end
+			end
+			return
+		end
+
 		if
 			entry.lastPathTarget
 			and distSq(currentDestination, entry.lastPathTarget) >= RETARGET_DISTANCE_SQ
 			and (os.clock() - entry.lastRepathClock) >= CONFIG.REPATH_INTERVAL
 		then
+			log("Repath", npc.Name)
 			if not repath(currentDestination) then
-				teardown(npc, false)
-
-				if onFailed then
-					onFailed()
-				end
-
+				handlePathFailure()
 				return
 			end
 		end
@@ -306,7 +336,7 @@ local function startSteering(
 		local waypoint = waypoints[entry.waypointIndex]
 
 		if not waypoint then
-			teardown(npc, false)
+			teardown(npc)
 
 			if onReached then
 				onReached()
@@ -327,7 +357,7 @@ local function startSteering(
 			entry.waypointIndex += 1
 
 			if entry.waypointIndex > #waypoints then
-				teardown(npc, false)
+				teardown(npc)
 
 				if onReached then
 					onReached()
@@ -369,12 +399,9 @@ local function startSteering(
 			entry.lastProgressPos = rootPos
 			entry.lastProgressClock = os.clock()
 		elseif os.clock() - entry.lastProgressClock >= CONFIG.STUCK_TIMEOUT then
+			log("Stuck -> Repath", npc.Name)
 			if not repath(currentDestination) then
-				teardown(npc, false)
-
-				if onFailed then
-					onFailed()
-				end
+				handlePathFailure()
 			end
 		end
 	end)
@@ -382,7 +409,7 @@ end
 
 function MotionController.Roam(npc, home, config)
 	cancelRoam(npc)
-	teardown(npc, false)
+	teardown(npc)
 
 	setSpeed(npc, config.Speed * 0.5)
 
@@ -506,6 +533,7 @@ function MotionController.Chase(npc, target, config, onReached)
 		and existing.chaseTarget == target
 		and existing.heartbeatConn
 	then
+		log("Chase Already Active", npc.Name)
 		return
 	end
 
@@ -543,8 +571,19 @@ function MotionController.Chase(npc, target, config, onReached)
 		chaseGetDestination,
 		config.AttackRange,
 		target,
-		targetRoot
+		targetRoot,
+		true
 	)
+end
+
+-- Lets NPCController verify a Chase-state NPC actually has a live movement job,
+-- so it only restarts the chase when it's truly missing (safety net, not the
+-- normal path).
+function MotionController.IsChasing(npc, target)
+	local entry = active[npc]
+	return entry ~= nil
+		and entry.chaseTarget == target
+		and entry.heartbeatConn ~= nil
 end
 
 function MotionController.MoveTo(npc, position, config, onReached)
@@ -562,14 +601,7 @@ end
 
 function MotionController.Stop(npc)
 	cancelRoam(npc)
-
-	local entry = active[npc]
-
-	local keepChaseTarget =
-		entry ~= nil
-		and entry.chaseTarget ~= nil
-
-	teardown(npc, keepChaseTarget)
+	teardown(npc)
 end
 
 return MotionController
