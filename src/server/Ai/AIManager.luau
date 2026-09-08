@@ -10,35 +10,50 @@ local CONFIG = {
 	LOD_MID_MULTIPLIER = 2,
 	LOD_FAR_MULTIPLIER = 4,
 	LOD_FAR_DETECTION_MULTIPLIER = 5,
+	LOSE_TARGET_BUFFER = 6,
 }
 
 local registry = {}
 local registryByInstance = {}
+local chasingSet = {}
 local registryCount = 0
 local detectionConnection = nil
 local active = false
 local detectionElapsed = 0
 local chaseElapsed = 0
+local cachedPlayerPositions = nil
+local cachedPlayerCount = 0
 
-local function getPlayerPositions()
-	local positions = {}
-	for _, player in ipairs(Players:GetPlayers()) do
+local function refreshPlayerPositions()
+	local positions = cachedPlayerPositions
+	if positions then
+		table.clear(positions)
+	else
+		positions = {}
+		cachedPlayerPositions = positions
+	end
+
+	local count = 0
+	local players = Players:GetPlayers()
+
+	for i = 1, #players do
+		local player = players[i]
 		local character = player.Character
 		if character then
 			local root = character:FindFirstChild("HumanoidRootPart")
 			if root then
 				positions[player] = root.Position
+				count += 1
 			end
 		end
 	end
-	return positions
+
+	cachedPlayerCount = count
+	return positions, count
 end
 
-local function computeTier(closestDist, detectionRange, controller)
-	if controller:IsEngaged() then
-		return "Near"
-	end
-	if closestDist <= detectionRange * CONFIG.LOD_MID_MULTIPLIER then
+local function computeTier(closestDist, detectionRange, isEngaged)
+	if isEngaged or closestDist <= detectionRange * CONFIG.LOD_MID_MULTIPLIER then
 		return "Near"
 	elseif closestDist <= detectionRange * CONFIG.LOD_FAR_MULTIPLIER then
 		return "Mid"
@@ -54,8 +69,8 @@ local function getDetectionInterval(tier)
 	return CONFIG.DETECTION_INTERVAL
 end
 
-local function runDetection(playerPositions, dt)
-	if not next(playerPositions) then
+local function runDetection(playerPositions, playerCount, dt)
+	if playerCount == 0 then
 		return
 	end
 
@@ -63,15 +78,14 @@ local function runDetection(playerPositions, dt)
 		local root = entry.root
 
 		if not root or not root.Parent then
-			if entry.npc then
-				registryByInstance[entry.npc] = nil
-			end
+			registryByInstance[entry.npc] = nil
+			chasingSet[npcId] = nil
 			registry[npcId] = nil
 			registryCount -= 1
 			continue
 		end
 
-		entry.detectionElapsed = (entry.detectionElapsed or 0) + dt
+		entry.detectionElapsed += dt
 		local requiredInterval = getDetectionInterval(entry.lodTier)
 
 		if entry.detectionElapsed < requiredInterval then
@@ -85,32 +99,50 @@ local function runDetection(playerPositions, dt)
 		local closestDist = math.huge
 
 		for player, pos in pairs(playerPositions) do
-			local dist = (npcPos - pos).Magnitude
-			if dist < closestDist then
-				closestDist = dist
+			local dx = npcPos.X - pos.X
+			local dy = npcPos.Y - pos.Y
+			local dz = npcPos.Z - pos.Z
+			local distSq = dx * dx + dy * dy + dz * dz
+
+			if distSq < closestDist then
+				closestDist = distSq
 				closestPlayer = player
 			end
 		end
 
-		entry.lodTier = computeTier(closestDist, detectionRange, entry.controller)
+		closestDist = math.sqrt(closestDist)
+
+		local controller = entry.controller
+		local isEngaged = controller:IsEngaged()
+		local loseRange = detectionRange + CONFIG.LOSE_TARGET_BUFFER
 
 		if closestPlayer and closestDist <= detectionRange then
-			entry.controller:OnPlayerDetected(closestPlayer, closestDist)
+			controller:OnPlayerDetected(closestPlayer, closestDist)
+		elseif not (isEngaged and closestPlayer and closestDist <= loseRange) then
+			controller:OnPlayerLost()
+		end
+
+		entry.lodTier = computeTier(closestDist, detectionRange, isEngaged)
+
+		if controller:IsChasing() then
+			chasingSet[npcId] = entry
 		else
-			entry.controller:OnPlayerLost()
+			chasingSet[npcId] = nil
 		end
 	end
 end
 
-local function runChaseRefresh(playerPositions)
-	if not next(playerPositions) then
+local function runChaseRefresh(playerPositions, playerCount)
+	if playerCount == 0 then
 		return
 	end
 
-	for _, entry in pairs(registry) do
+	for npcId, entry in pairs(chasingSet) do
 		local controller = entry.controller
 		if controller:IsChasing() then
 			controller:RefreshChase(playerPositions)
+		else
+			chasingSet[npcId] = nil
 		end
 	end
 end
@@ -132,6 +164,7 @@ function AIManager.Register(npcId, controller, root, detectionRange)
 		npc = npc,
 		detectionRange = detectionRange,
 		lodTier = "Near",
+		detectionElapsed = 0,
 	}
 
 	registry[npcId] = entry
@@ -147,6 +180,7 @@ function AIManager.Unregister(npcId)
 		if entry.npc then
 			registryByInstance[entry.npc] = nil
 		end
+		chasingSet[npcId] = nil
 		registry[npcId] = nil
 		registryCount -= 1
 	end
@@ -181,18 +215,23 @@ function AIManager.Start()
 		chaseElapsed += dt
 
 		local playerPositions = nil
+		local playerCount = 0
+		local gotPositions = false
 
 		if detectionElapsed >= CONFIG.DETECTION_INTERVAL then
 			local elapsedSinceLastDetection = detectionElapsed
 			detectionElapsed = 0
-			playerPositions = getPlayerPositions()
-			runDetection(playerPositions, elapsedSinceLastDetection)
+			playerPositions, playerCount = refreshPlayerPositions()
+			gotPositions = true
+			runDetection(playerPositions, playerCount, elapsedSinceLastDetection)
 		end
 
 		if chaseElapsed >= CONFIG.CHASE_REFRESH_INTERVAL then
 			chaseElapsed = 0
-			playerPositions = playerPositions or getPlayerPositions()
-			runChaseRefresh(playerPositions)
+			if not gotPositions then
+				playerPositions, playerCount = refreshPlayerPositions()
+			end
+			runChaseRefresh(playerPositions, playerCount)
 		end
 	end)
 end
@@ -205,7 +244,10 @@ function AIManager.Stop()
 	active = false
 	registry = {}
 	registryByInstance = {}
+	chasingSet = {}
 	registryCount = 0
+	cachedPlayerPositions = nil
+	cachedPlayerCount = 0
 end
 
 function AIManager.GetRegisteredCount()
