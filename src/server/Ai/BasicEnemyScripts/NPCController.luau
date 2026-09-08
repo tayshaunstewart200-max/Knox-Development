@@ -11,12 +11,20 @@ local QuestTracker = require(script.Parent.Parent.Parent.Quests.QuestTracker)
 local NPCController = {}
 NPCController.__index = NPCController
 
+local DEBUG =false
+
 local LEASH_GRACE_PERIOD_DEFAULT = 4
 
 local DEATH_REWARD_POLICY = {
 	Type = "Participation",
 	MinimumContributionPercent = 0.20,
 }
+
+local function log(...)
+	if DEBUG then
+		print(string.format("[AI %.2f]", os.clock()), ...)
+	end
+end
 
 function NPCController.new(npc, config)
 	local self = setmetatable({}, NPCController)
@@ -51,6 +59,8 @@ function NPCController:_getLeashGracePeriod()
 end
 
 function NPCController:_onStateChanged(from, to)
+	log(self.npc.Name, from, "->", to)
+
 	if to == "Roam" then
 		self:_enterRoam()
 	elseif to == "Chase" then
@@ -71,6 +81,7 @@ function NPCController:_enterRoam()
 end
 
 function NPCController:_enterChase()
+	print(string.format("[NPC %.3f] _enterChase called", os.clock()))
 	if not self.target then
 		self.stateManager:Transition("Roam")
 		return
@@ -157,9 +168,13 @@ function NPCController:RefreshChase(playerPositions)
 		self.leashTimerStart = nil
 	end
 
-	MotionController.Chase(self.npc, self.target, self.config, function()
-		AIManager.NotifyDestinationReached(self.id)
-	end)
+	-- Safety net only: MotionController.Chase already runs its own persistent
+	-- movement job, so only restart it if that job isn't actually alive.
+	if not MotionController.IsChasing(self.npc, self.target) then
+		MotionController.Chase(self.npc, self.target, self.config, function()
+			AIManager.NotifyDestinationReached(self.id)
+		end)
+	end
 end
 
 function NPCController:OnPlayerDetected(player, distance)
@@ -195,6 +210,7 @@ function NPCController:OnPlayerLost()
 end
 
 function NPCController:OnAttackEnd(targetAlive)
+	print(string.format("[NPC %.3f] OnAttackEnd called", os.clock()))
 	if not self.alive then
 		return
 	end
@@ -227,6 +243,8 @@ function NPCController:OnAttackEnd(targetAlive)
 	local root = self.npc.HumanoidRootPart
 	local dist = (root.Position - targetRoot.Position).Magnitude
 	local leaveRange = self.config.AttackRange + (self.config.LeaveAttackRangeBuffer or 5)
+
+	log(self.npc.Name, "Chase after Attack")
 
 	if dist <= leaveRange then
 		self:_enterAttack()
