@@ -7,16 +7,14 @@ local CONFIG = {
 local pending = {}
 
 function CleanupService.RegisterDead(npc)
-	local id = npc.Name
-
-	if pending[id] then
+	if pending[npc] then
 		return
 	end
 
-	pending[id] = true
+	pending[npc] = true
 
 	task.delay(CONFIG.CLEANUP_DELAY, function()
-		pending[id] = nil
+		pending[npc] = nil
 		if npc and npc.Parent then
 			npc:Destroy()
 		end
@@ -24,7 +22,7 @@ function CleanupService.RegisterDead(npc)
 end
 
 function CleanupService.Cancel(npc)
-	pending[npc.Name] = nil
+	pending[npc] = nil
 end
 
 return CleanupService
