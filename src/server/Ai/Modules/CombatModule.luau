@@ -1,9 +1,14 @@
+local EnemyDamageService = require(script.Parent.Parent.Parent.Combat.Modules.EnemyDamageService)
+
 local CombatModule = {}
+
 local CONFIG = {
 	DAMAGE_DELAY = 0.3,
 	ATTACK_RANGE_BUFFER = 5,
 }
+
 local cooldowns = {}
+
 local function isInRange(npc, target, attackRange)
 	local root = npc:FindFirstChild("HumanoidRootPart")
 	if not root then return false end
@@ -13,6 +18,7 @@ local function isInRange(npc, target, attackRange)
 	if not targetRoot then return false end
 	return (root.Position - targetRoot.Position).Magnitude <= (attackRange + CONFIG.ATTACK_RANGE_BUFFER)
 end
+
 local function isTargetAlive(target)
 	local character = target.Character
 	if not character then return false end
@@ -20,6 +26,7 @@ local function isTargetAlive(target)
 	if not humanoid then return false end
 	return humanoid.Health > 0
 end
+
 function CombatModule.Attack(npc, target, config, onComplete)
 	local id = npc
 	if cooldowns[id] then
@@ -42,9 +49,8 @@ function CombatModule.Attack(npc, target, config, onComplete)
 		end
 		if isTargetAlive(target) and isInRange(npc, target, config.AttackRange) then
 			local character = target.Character
-			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-			if humanoid then
-				humanoid:TakeDamage(config.Damage)
+			if character then
+				EnemyDamageService:Apply(npc, character, config.Damage)
 			end
 		end
 	end)
@@ -55,10 +61,13 @@ function CombatModule.Attack(npc, target, config, onComplete)
 		end
 	end)
 end
+
 function CombatModule.IsOnCooldown(npc)
 	return cooldowns[npc] == true
 end
+
 function CombatModule.ClearCooldown(npc)
 	cooldowns[npc] = nil
 end
+
 return CombatModule
