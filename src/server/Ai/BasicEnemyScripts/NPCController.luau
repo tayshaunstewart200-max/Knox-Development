@@ -6,6 +6,7 @@ local ZoneHandler = require(script.Parent.Parent.Modules.ZoneHandler)
 local CleanupService = require(script.Parent.Parent.Modules.CleanupService)
 local ContributionService = require(script.Parent.Parent.Parent.Progression.ContributionService)
 local RewardService = require(script.Parent.Parent.Parent.Progression.RewardService)
+local QuestTracker = require(script.Parent.Parent.Parent.Quests.QuestTracker)
 
 local NPCController = {}
 NPCController.__index = NPCController
@@ -272,6 +273,10 @@ function NPCController:OnDeath()
 	end
 
 	if targetHumanoid then
+		local qualifying = ContributionService:GetQualifyingPlayers(targetHumanoid, 0)
+		for _, entry in ipairs(qualifying) do
+			QuestTracker.HandleEnemyKilled(entry.player, self.npc.Name)
+		end
 		ContributionService:Clear(targetHumanoid)
 	end
 
